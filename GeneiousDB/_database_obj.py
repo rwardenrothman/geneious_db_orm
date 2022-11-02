@@ -149,9 +149,16 @@ class GeneiousDatabase(AbstractContextManager):
 
 if __name__ == '__main__':
     from Bio import SeqIO
-    with GeneiousDatabase('Geneious_Foundry_Backend') as gdb:
-        p = gdb.search_contains('name', 'pGRO-A0136')[0]
-        r = gdb.get_SeqRecord(p)
-        print(p)
+    with GeneiousDatabase('GeneiousDB') as gdb:
+        p: AnnotatedDocument = gdb.search_contains('urn', 'urn:local:Rob Warden-Rothman:1sf-ej4kfkm')[0]
+        # p.setLGinfo("https://my.labguru.com/biocollections/plasmids/5428", "Plasmids", 5424)
+        # p.setLGinfo("https://my.labguru.com/biocollections/genetic%20parts/18737", "Genetic Parts", 18737)
+        p.setLGinfo("https://my.labguru.com/biocollections/genetic%20parts/20825", "Genetic Parts", 20825)
+        # p.folder_id = 3156
+        # p.folder_id = 1502
+        # r = gdb.get_SeqRecord(p)
+        # print(p.LGinfo)
+        # gdb.session.flush()
+        # gdb.session.commit()
 
-    SeqIO.write([r], 'out.gb', 'gb')
+    # SeqIO.write([r], 'out.gb', 'gb')

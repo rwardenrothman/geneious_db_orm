@@ -1,15 +1,16 @@
 # coding: utf-8
 from datetime import datetime
 from functools import lru_cache
-from typing import Dict, Type, TypeVar, Optional, Any
+from typing import Dict, Type, TypeVar, Optional, Any, Union
 
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey, Integer, \
     String, Table, Text, text
 from sqlalchemy.dialects.postgresql import OID
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base, AbstractConcreteBase
-from xmltodict import parse
+from xmltodict import parse, unparse
 
+from GeneiousDB._callback_dict import CallbackDict, VT
 from GeneiousDB._xml_type import XML
 
 Base = declarative_base()
@@ -106,13 +107,42 @@ class AnnotatedDocument(Base):
     folder_id = Column(ForeignKey('folder.id', ondelete='CASCADE'), nullable=False, index=True)
     modified = Column(DateTime, nullable=False)
     urn = Column(String(255), nullable=False, unique=True)
-    document_xml = Column(XML, nullable=False)
-    plugin_document_xml = Column(XML, nullable=False)
+    _document_xml = Column(Text, nullable=False, name='document_xml')
+    _plugin_document_xml = Column(Text, nullable=False, name='plugin_document_xml')
     reference_count = Column(Integer, nullable=False)
 
     folder = relationship('Folder')
     g_users = relationship('GUser', secondary='document_read')
     file_datas = relationship('DocumentFileDatum', secondary='document_to_file_data')
+
+    _doc_xml_dict = {}
+    _plugin_xml_dict = {}
+
+    @property
+    def document_xml(self):
+        if not self._doc_xml_dict:
+            self._doc_xml_dict = parse(self._document_xml)
+            return self._doc_xml_dict
+
+        try:
+            return self._doc_xml_dict
+        finally:
+            new_xml = unparse(self._doc_xml_dict)
+            if new_xml != self._document_xml:
+                self._document_xml = new_xml
+
+    @property
+    def plugin_document_xml(self):
+        if not self._plugin_xml_dict:
+            self._plugin_xml_dict = parse(self._plugin_document_xml)
+            return self._plugin_xml_dict
+
+        try:
+            return self._plugin_xml_dict
+        finally:
+            new_xml = unparse(self._plugin_xml_dict)
+            if new_xml != self._plugin_document_xml:
+                self._plugin_document_xml = new_xml
 
     @property
     def xml(self) -> dict:
@@ -154,7 +184,6 @@ class AnnotatedDocument(Base):
         return self.xml['fields']['sequence_residues']
 
     @property
-    @lru_cache(maxsize=None)
     def LGinfo(self) -> Optional[Dict[str, Any]]:
         try:
             for i in range(27):
@@ -167,6 +196,38 @@ class AnnotatedDocument(Base):
                     }
         except (KeyError, IndexError):
             return None
+
+    def setLGinfo(self, url: str, collection: str, lg_id: Union[int, str]):
+        lg_xml = f'<note code="RobWarden-Rothman-LabGuruInfo-1659621929188" type="note">' \
+                 f'<LGLink>{url}</LGLink>' \
+                 f'<Collection>{collection}</Collection>' \
+                 f'<ID type="int">{str(lg_id)}</ID>' \
+                 f'</note>'
+
+        if 'notes' in self.xml:
+            if isinstance(self.document_xml['document']['notes']['note'], list):
+                for n in self.document_xml['document']['notes']['note']:
+                    if n['@code'] == 'RobWarden-Rothman-LabGuruInfo-1659621929188':
+                        cur_note = n
+                        break
+                else:
+                    cur_note = {'@code': 'RobWarden-Rothman-LabGuruInfo-1659621929188', '@type': 'note'}
+                    self.document_xml['document']['notes']['note'] += [cur_note]
+
+                cur_note.update(dict(LGLink=url, Collection=collection, ID={'@type': 'int', '#text': str(lg_id)}))
+                self.document_xml['document']['notes']['note'] += []
+            elif isinstance(self.document_xml['document']['notes']['note'], dict):
+                old_note = self.document_xml['document']['notes']['note']
+                self.document_xml['document']['notes']['note'] = [old_note]
+                self.setLGinfo(url, collection, lg_id)
+            else:
+                raise ValueError(f"Cannot handle notes like {repr(self.document_xml['document']['notes']['note'])}")
+        else:
+            cur_note = {'@code': 'RobWarden-Rothman-LabGuruInfo-1659621929188', '@type': 'note'}
+            cur_note.update(dict(LGLink=url, Collection=collection, ID={'@type': 'int', '#text': str(lg_id)}))
+            self.document_xml['document']['notes'] = {'note': [cur_note]}
+
+        # self.document_xml = self.document_xml.copy()
 
     def __str__(self):
         return f'<Annotated {self.mol_type} Document: {self.doc_name} ({self.id:d})>'
