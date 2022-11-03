@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(
-    name='geneious_shared_db_orm',
+    name='GeneiousDB',
     version='0.2',
     packages=['GeneiousDB'],
     url='',
