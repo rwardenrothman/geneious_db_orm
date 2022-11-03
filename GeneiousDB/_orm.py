@@ -4,14 +4,11 @@ from functools import lru_cache
 from typing import Dict, Type, TypeVar, Optional, Any, Union
 
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey, Integer, \
-    String, Table, Text, text
+    String, Table, Text, text, func
 from sqlalchemy.dialects.postgresql import OID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Session
 from sqlalchemy.ext.declarative import declarative_base, AbstractConcreteBase
 from xmltodict import parse, unparse
-
-from GeneiousDB._callback_dict import CallbackDict, VT
-from GeneiousDB._xml_type import XML
 
 Base = declarative_base()
 metadata = Base.metadata
@@ -100,16 +97,17 @@ class GUser(Base):
     primary_group = relationship('GGroup')
 
 
+
 class AnnotatedDocument(Base):
     __tablename__ = 'annotated_document'
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, nullable=True)
     folder_id = Column(ForeignKey('folder.id', ondelete='CASCADE'), nullable=False, index=True)
     modified = Column(DateTime, nullable=False)
     urn = Column(String(255), nullable=False, unique=True)
     _document_xml = Column(Text, nullable=False, name='document_xml')
     _plugin_document_xml = Column(Text, nullable=False, name='plugin_document_xml')
-    reference_count = Column(Integer, nullable=False)
+    reference_count = Column(Integer, nullable=False, default=0)
 
     folder = relationship('Folder')
     g_users = relationship('GUser', secondary='document_read')
@@ -118,43 +116,82 @@ class AnnotatedDocument(Base):
     _doc_xml_dict = {}
     _plugin_xml_dict = {}
 
+    @staticmethod
+    def get_next_id(s: Session):
+        max_id = s.scalar(func.max(AnnotatedDocument.id))
+        return max_id + 1
+
     @property
     def document_xml(self):
         if not self._doc_xml_dict:
+            if not self._document_xml:
+                self._doc_xml_dict = {'document': {}}
+                self._document_xml = unparse(self._doc_xml_dict, full_document=False, pretty=True)
+                return self.document_xml
+
             self._doc_xml_dict = parse(self._document_xml)
             return self._doc_xml_dict
 
         try:
             return self._doc_xml_dict
         finally:
-            new_xml = unparse(self._doc_xml_dict)
+            new_xml = unparse(self._doc_xml_dict, full_document=False, pretty=True)
             if new_xml != self._document_xml:
                 self._document_xml = new_xml
 
     @property
     def plugin_document_xml(self):
         if not self._plugin_xml_dict:
+            if not self._plugin_document_xml:
+                self._plugin_xml_dict = {'XMLSerialisableRootElement': {}}
+                self._plugin_document_xml = unparse(self._plugin_xml_dict, full_document=False, pretty=True)
+                return self.plugin_document_xml
+
             self._plugin_xml_dict = parse(self._plugin_document_xml)
             return self._plugin_xml_dict
 
         try:
             return self._plugin_xml_dict
         finally:
-            new_xml = unparse(self._plugin_xml_dict)
+            new_xml = unparse(self._plugin_xml_dict, full_document=False, pretty=True)
             if new_xml != self._plugin_document_xml:
                 self._plugin_document_xml = new_xml
+
+    def force_xml_updates(self):
+        new_xml = unparse(self._plugin_xml_dict, full_document=False, pretty=True)
+        self._plugin_document_xml = new_xml
+
+        new_xml = unparse(self._doc_xml_dict, full_document=False, pretty=True)
+        self._document_xml = new_xml
 
     @property
     def xml(self) -> dict:
         return self.document_xml['document']
 
     @property
+    def plugin_xml(self) -> dict:
+        return self.plugin_document_xml['XMLSerialisableRootElement']
+
+    @property
     def doc_name(self) -> str:
         return self.xml['hiddenFields']['cache_name']
+
+    @doc_name.setter
+    def doc_name(self, value: str):
+        if 'hiddenFields' not in self.xml:
+            self.xml['hiddenFields'] = {}
+        self.xml['hiddenFields']['cache_name'] = value
+        self.plugin_xml['name'] = value
 
     @property
     def doc_urn(self) -> str:
         return self.xml['hiddenFields']['cache_urn']['#text']
+
+    @doc_urn.setter
+    def doc_urn(self, value: str):
+        if 'hiddenFields' not in self.xml:
+            self.xml['hiddenFields'] = {}
+        self.xml['hiddenFields']['cache_urn'] = {'@type': 'urn', '#text': value}
 
     @property
     def accession(self) -> str:
@@ -167,21 +204,61 @@ class AnnotatedDocument(Base):
             return hf['referenced_documents']['referenced_documents'].split('@')[0]
         return ''
 
+    @accession.setter
+    def accession(self, value: str):
+        if 'hiddenFields' not in self.xml:
+            self.xml['hiddenFields'] = {}
+        self.xml['hiddenFields']['override_accession'] = value
+
     @property
     def mol_type(self) -> str:
         return self.xml['fields'].get('molType', self.xml['fields'].get('oligoType', self.xml['@class'].split('.')[-1]))
+
+    @mol_type.setter
+    def mol_type(self, value: str):
+        if 'fields' not in self.xml:
+            self.xml['fields'] = {}
+        self.xml['fields']['molType'] = value
 
     @property
     def linear(self) -> bool:
         return self.xml['fields']['topology'] == 'linear'
 
+    @linear.setter
+    def linear(self, value: bool):
+        if 'fields' not in self.xml:
+            self.xml['fields'] = {}
+        self.xml['fields']['topology'] = 'linear' if value else 'circular'
+
     @property
     def circular(self) -> bool:
         return not self.linear
 
+    @circular.setter
+    def circular(self, value: bool):
+        self.linear = not value
+
     @property
     def sequence_str(self) -> str:
         return self.xml['fields']['sequence_residues']
+
+    @sequence_str.setter
+    def sequence_str(self, value: str):
+        if 'fields' not in self.xml:
+            self.xml['fields'] = {}
+        self.xml['fields']['sequence_residues'] = value
+        self.plugin_xml['charSequence'] = value
+
+    @property
+    def description(self) -> str:
+        return self.xml['hiddenFields']['description']
+
+    @description.setter
+    def description(self, value: str):
+        if 'hiddenFields' not in self.xml:
+            self.xml['hiddenFields'] = {}
+        self.xml['hiddenFields']['description'] = value
+        self.plugin_xml['description'] = value
 
     @property
     def LGinfo(self) -> Optional[Dict[str, Any]]:

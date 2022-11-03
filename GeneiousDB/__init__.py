@@ -1,2 +1,2 @@
-from _database_obj import GeneiousDatabase
-from _orm import AnnotatedDocument, Folder
+from GeneiousDB._database_obj import GeneiousDatabase
+from GeneiousDB._orm import AnnotatedDocument, Folder

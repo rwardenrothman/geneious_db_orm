@@ -1,9 +1,11 @@
 from contextlib import AbstractContextManager
+from datetime import datetime
 from tempfile import TemporaryDirectory
 from types import TracebackType
 from typing import Type, Optional, List
 import operator as op
 from subprocess import run
+from uuid import uuid4
 
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
@@ -14,7 +16,7 @@ import json
 
 from GeneiousDB._orm import SEARCH_FIELD_BY_TYPE, SFV, AnnotatedDocument, IntegerSearchFieldValue, LongSearchFieldValue, \
     FloatSearchFieldValue, DoubleSearchFieldValue, StringSearchFieldValue
-from GeneiousDB._parsing import parse_annotation
+from GeneiousDB._parsing import parse_annotation, unparse_annotations
 
 
 class GeneiousDatabase(AbstractContextManager):
@@ -146,19 +148,59 @@ class GeneiousDatabase(AbstractContextManager):
         rec = SeqRecord(Seq(seq), name=doc.doc_name, description=desc, features=features, annotations=annotations)
         return rec
 
+    def from_SeqRecord(self, record: SeqRecord, base_doc: AnnotatedDocument = None, template_id: int = 24994
+                       ) -> AnnotatedDocument:
+        if base_doc is None:
+            # base_doc = AnnotatedDocument()
+            base_doc = AnnotatedDocument()
+            xml_template: AnnotatedDocument = self.session.get(AnnotatedDocument, template_id)
+
+            k: str
+            for k in xml_template.xml.keys():
+                if k.startswith('@'):
+                    base_doc.xml[k] = xml_template.xml[k]
+            # for k in xml_template.plugin_xml.keys():
+            #     if k.startswith('@'):
+            #         base_doc.plugin_xml[k] = xml_template.plugin_xml[k]
+
+        base_doc.description = record.description
+        base_doc.sequence_str = str(record.seq)
+        base_doc.mol_type = record.annotations.get('molecule_type', '')
+        base_doc.circular = record.annotations.get('topology', 'linear') == 'circular'
+        base_doc.modified = record.annotations.get('date', None) or datetime.now()
+        base_doc.doc_name = record.name
+        base_doc.plugin_xml['sequenceAnnotations'] = [unparse_annotations(f) for f in record.features]
+
+        if not base_doc.urn:
+            uuid_str = str(uuid4()).replace('-', '')
+            new_urn = f'urn:local:biofoundry:{uuid_str[:3]}-{uuid_str[-7:]}'
+            base_doc.urn = new_urn
+            base_doc.doc_urn = new_urn
+
+        base_doc.force_xml_updates()
+        base_doc.id = AnnotatedDocument.get_next_id(self.session)
+        base_doc.modified = datetime.now()
+        return base_doc
+
+    def plasmid_from_seqrecord(self, record: SeqRecord, base_doc: AnnotatedDocument = None) -> AnnotatedDocument:
+        return self.from_SeqRecord(record, base_doc, 24999)
+
+    def oligo_from_seqrecord(self, record: SeqRecord, base_doc: AnnotatedDocument = None) -> AnnotatedDocument:
+        out_doc = self.from_SeqRecord(record, base_doc, 3898)
+        out_doc.xml['fields']['oligoType'] = 'Primer'
+        out_doc.force_xml_updates()
+        return out_doc
 
 if __name__ == '__main__':
     from Bio import SeqIO
     with GeneiousDatabase('GeneiousDB') as gdb:
-        p: AnnotatedDocument = gdb.search_contains('urn', 'urn:local:Rob Warden-Rothman:1sf-ej4kfkm')[0]
-        # p.setLGinfo("https://my.labguru.com/biocollections/plasmids/5428", "Plasmids", 5424)
-        # p.setLGinfo("https://my.labguru.com/biocollections/genetic%20parts/18737", "Genetic Parts", 18737)
-        p.setLGinfo("https://my.labguru.com/biocollections/genetic%20parts/20825", "Genetic Parts", 20825)
-        # p.folder_id = 3156
-        # p.folder_id = 1502
-        # r = gdb.get_SeqRecord(p)
-        # print(p.LGinfo)
-        # gdb.session.flush()
-        # gdb.session.commit()
+        new_record = SeqIO.read(r"C:\Users\Rob Warden-Rothman\GRO Biosciences\Projects - Foundry\Workflow Development"
+                                r"\LG Updates\i7_A_Rev.gb", 'gb')
+        old_doc = None
+        # old_doc = gdb.session.get(AnnotatedDocument, 47028)  # New Plasmid
+        # old_doc = gdb.session.get(AnnotatedDocument, 47031)  # New Oligo
+        new_doc = gdb.oligo_from_seqrecord(new_record, old_doc)
+        new_doc.folder_id = 5077
 
-    # SeqIO.write([r], 'out.gb', 'gb')
+        gdb.session.add(new_doc)
+        gdb.session.commit()

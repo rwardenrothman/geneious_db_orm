@@ -1,7 +1,7 @@
 from collections import defaultdict
-from typing import Dict, List, DefaultDict
+from typing import Dict, List, DefaultDict, Union
 
-from Bio.SeqFeature import FeatureLocation, BeforePosition, AfterPosition, ExactPosition, SeqFeature
+from Bio.SeqFeature import FeatureLocation, BeforePosition, AfterPosition, ExactPosition, SeqFeature, CompoundLocation
 
 
 def parse_interval_dict(i_data: Dict[str, str]) -> FeatureLocation:
@@ -35,11 +35,40 @@ def parse_interval_dict(i_data: Dict[str, str]) -> FeatureLocation:
     return FeatureLocation(min_pos, max_pos, strand)
 
 
+def unparse_interval_dict(fl: FeatureLocation) -> Union[list, Dict[str, str]]:
+    if isinstance(fl, CompoundLocation):
+        return [unparse_interval_dict(loc) for loc in fl.parts]
+
+    out_dict = {
+        'minimumIndex': fl.start + 1,
+        'maximumIndex': fl.end + 0
+    }
+
+    if isinstance(fl.start, BeforePosition):
+        out_dict['@beginsBeforeMinimumIndex'] = 'true'
+    if isinstance(fl.end, BeforePosition):
+        out_dict['@endsAfterMaximumIndex'] = 'true'
+
+    if fl.strand == 1:
+        out_dict['direction'] = 'leftToRight'
+    elif fl.strand == 0:
+        out_dict['direction'] = 'rightToLeft'
+
+    return out_dict
+
+
 def parse_qualifiers(q_data: Dict[str, List[Dict[str, str]]]) -> DefaultDict[str, List[str]]:
     out_dict = defaultdict(list)
     for q in q_data['qualifier']:
         out_dict[q['name']].append(q['value'])
     return out_dict
+
+
+def unparse_qualifiers(q_data: Dict[str, List[str]]):
+    out_list = []
+    for key, value_list in q_data.items():
+        out_list.append({'qualifier': {'name': key, 'value': value_list[0]}})
+    return out_list
 
 
 def parse_annotation(a_data: dict, enforce_len: bool = False) -> SeqFeature:
@@ -55,3 +84,18 @@ def parse_annotation(a_data: dict, enforce_len: bool = False) -> SeqFeature:
 
     return SeqFeature(loc, f_type, id=a_data['description'], qualifiers=quals)
 
+
+def unparse_annotations(feature: SeqFeature) -> dict:
+    for name_qualifier in ['label', 'name', 'Name', 'id']:
+        if name_qualifier in feature.qualifiers:
+            description = feature.qualifiers[name_qualifier][0]
+            break
+    else:
+        description = feature.id
+    out_dict = {
+        'intervals': {'interval': unparse_interval_dict(feature.location)},
+        'qualifiers': unparse_qualifiers(feature.qualifiers),
+        'description': description,
+        'type': feature.type
+    }
+    return {'annotation': out_dict}
