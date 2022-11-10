@@ -240,7 +240,7 @@ class AnnotatedDocument(Base):
 
     @property
     def sequence_str(self) -> str:
-        return self.xml['fields']['sequence_residues']
+        return self.plugin_xml['charSequence']
 
     @sequence_str.setter
     def sequence_str(self, value: str):

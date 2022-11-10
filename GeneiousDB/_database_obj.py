@@ -194,13 +194,16 @@ class GeneiousDatabase(AbstractContextManager):
 if __name__ == '__main__':
     from Bio import SeqIO
     with GeneiousDatabase('GeneiousDB') as gdb:
-        new_record = SeqIO.read(r"C:\Users\Rob Warden-Rothman\GRO Biosciences\Projects - Foundry\Workflow Development"
-                                r"\LG Updates\i7_A_Rev.gb", 'gb')
-        old_doc = None
-        # old_doc = gdb.session.get(AnnotatedDocument, 47028)  # New Plasmid
-        # old_doc = gdb.session.get(AnnotatedDocument, 47031)  # New Oligo
-        new_doc = gdb.oligo_from_seqrecord(new_record, old_doc)
-        new_doc.folder_id = 5077
-
-        gdb.session.add(new_doc)
-        gdb.session.commit()
+        # new_record = SeqIO.read(r"C:\Users\Rob Warden-Rothman\GRO Biosciences\Projects - Foundry\Workflow Development"
+        #                         r"\LG Updates\i7_A_Rev.gb", 'gb')
+        # old_doc = None
+        # # old_doc = gdb.session.get(AnnotatedDocument, 47028)  # New Plasmid
+        # # old_doc = gdb.session.get(AnnotatedDocument, 47031)  # New Oligo
+        # new_doc = gdb.oligo_from_seqrecord(new_record, old_doc)
+        # new_doc.folder_id = 5077
+        #
+        # gdb.session.add(new_doc)
+        # gdb.session.commit()
+        pc1061_gdb: AnnotatedDocument = gdb.search_contains('urn', 'urn:local:ChrisGregg:de-egavqnm')[0]
+        pc1061_gdb_seq = gdb.get_SeqRecord(pc1061_gdb)
+        print(pc1061_gdb_seq.seq)

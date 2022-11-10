@@ -59,7 +59,13 @@ def unparse_interval_dict(fl: FeatureLocation) -> Union[list, Dict[str, str]]:
 
 def parse_qualifiers(q_data: Dict[str, List[Dict[str, str]]]) -> DefaultDict[str, List[str]]:
     out_dict = defaultdict(list)
-    for q in q_data['qualifier']:
+    if q_data is None or q_data.get('qualifier', None) is None:
+        return out_dict
+    if isinstance(q_data['qualifier'], list):
+        for q in q_data['qualifier']:
+            out_dict[q['name']].append(q['value'])
+    elif isinstance(q_data['qualifier'], dict):
+        q = q_data['qualifier']
         out_dict[q['name']].append(q['value'])
     return out_dict
 
