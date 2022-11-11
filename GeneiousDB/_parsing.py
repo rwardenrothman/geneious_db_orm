@@ -63,7 +63,15 @@ def parse_qualifiers(q_data: Dict[str, List[Dict[str, str]]]) -> DefaultDict[str
         return out_dict
     if isinstance(q_data['qualifier'], list):
         for q in q_data['qualifier']:
-            out_dict[q['name']].append(q['value'])
+            try:
+                out_dict[q['name']].append(q['value'])
+            except KeyError:
+                q_name = q.pop('name')
+                for k, v in q.items():
+                    if isinstance(v, dict):
+                        out_dict[q_name].append(v.get('#text', str(v)))
+                    else:
+                        out_dict[q_name].append(str(v))
     elif isinstance(q_data['qualifier'], dict):
         q = q_data['qualifier']
         out_dict[q['name']].append(q['value'])

@@ -14,8 +14,10 @@ from sqlalchemy.orm import Session
 import boto3
 import json
 
+from tqdm import tqdm
+
 from GeneiousDB._orm import SEARCH_FIELD_BY_TYPE, SFV, AnnotatedDocument, IntegerSearchFieldValue, LongSearchFieldValue, \
-    FloatSearchFieldValue, DoubleSearchFieldValue, StringSearchFieldValue
+    FloatSearchFieldValue, DoubleSearchFieldValue, StringSearchFieldValue, Folder
 from GeneiousDB._parsing import parse_annotation, unparse_annotations
 
 
@@ -33,7 +35,7 @@ class GeneiousDatabase(AbstractContextManager):
     def __exit__(self, __exc_type: Optional[Type[BaseException]], __exc_value: Optional[BaseException],
                  __traceback: Optional[TracebackType]) -> Optional[bool]:
         self.close()
-        return True
+        return __exc_type is None
 
     def open(self) -> "GeneiousDatabase":
         if isinstance(self.session, Session):
@@ -137,7 +139,8 @@ class GeneiousDatabase(AbstractContextManager):
     def get_SeqRecord(self, doc: AnnotatedDocument) -> SeqRecord:
         seq: str = doc.plugin_document_xml['XMLSerialisableRootElement']['charSequence']
         features = [parse_annotation(a) for a in
-                    doc.plugin_document_xml['XMLSerialisableRootElement']['sequenceAnnotations']['annotation']]
+                    doc.plugin_document_xml['XMLSerialisableRootElement']['sequenceAnnotations']['annotation']
+                    if a.get('intervals') is not None and a.get('qualifiers') is not None]
         desc = doc.plugin_document_xml['XMLSerialisableRootElement'].get('description', '')
         annotations = {
             'molecule_type': doc.mol_type,
@@ -191,19 +194,20 @@ class GeneiousDatabase(AbstractContextManager):
         out_doc.force_xml_updates()
         return out_doc
 
+    def get_folder_by_name(self, folder_name: str) -> Folder:
+        return self.session.scalar(select(Folder).where(Folder.name == folder_name))
+
+    def get_folders_by_name(self, folder_name: str) -> List[Folder]:
+        return self.session.scalars(select(Folder).where(Folder.name == folder_name)).all()
+
+
 if __name__ == '__main__':
-    from Bio import SeqIO
-    with GeneiousDatabase('GeneiousDB') as gdb:
-        # new_record = SeqIO.read(r"C:\Users\Rob Warden-Rothman\GRO Biosciences\Projects - Foundry\Workflow Development"
-        #                         r"\LG Updates\i7_A_Rev.gb", 'gb')
-        # old_doc = None
-        # # old_doc = gdb.session.get(AnnotatedDocument, 47028)  # New Plasmid
-        # # old_doc = gdb.session.get(AnnotatedDocument, 47031)  # New Oligo
-        # new_doc = gdb.oligo_from_seqrecord(new_record, old_doc)
-        # new_doc.folder_id = 5077
-        #
-        # gdb.session.add(new_doc)
-        # gdb.session.commit()
-        pc1061_gdb: AnnotatedDocument = gdb.search_contains('urn', 'urn:local:ChrisGregg:de-egavqnm')[0]
-        pc1061_gdb_seq = gdb.get_SeqRecord(pc1061_gdb)
-        print(pc1061_gdb_seq.seq)
+    gdb = GeneiousDatabase('GeneiousDB')
+    gdb.open()
+    f = gdb.get_folder_by_name('Foundry')
+    # for d in tqdm(list(f.iter_docs('DNA'))):
+    all_docs: List[AnnotatedDocument] = list(f.iter_docs(recursive=True))
+    d: AnnotatedDocument
+    for d in tqdm(all_docs):
+        tqdm.write(str((str(d.folder), str(d))))
+    gdb.close()

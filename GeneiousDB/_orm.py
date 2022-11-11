@@ -1,12 +1,12 @@
 # coding: utf-8
 from datetime import datetime
 from functools import lru_cache
-from typing import Dict, Type, TypeVar, Optional, Any, Union
+from typing import Dict, Type, TypeVar, Optional, Any, Union, List, Iterable
 
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey, Integer, \
     String, Table, Text, text, func
 from sqlalchemy.dialects.postgresql import OID
-from sqlalchemy.orm import relationship, Session
+from sqlalchemy.orm import relationship, Session, backref
 from sqlalchemy.ext.declarative import declarative_base, AbstractConcreteBase
 from xmltodict import parse, unparse
 
@@ -73,8 +73,9 @@ class Folder(Base):
     name = Column(String(255), index=True)
 
     g_group = relationship('GGroup')
-    parent_folder = relationship('Folder', remote_side=[id])
+    subfolders: List["Folder"] = relationship('Folder', backref=backref('parent_folder', remote_side=[id]))
     users = relationship('GUser', secondary='hidden_folder_to_user')
+    documents: List["AnnotatedDocument"] = relationship('AnnotatedDocument', back_populates='folder')
 
     def __str__(self):
         return f"<Folder: {self.full_path}>"
@@ -85,6 +86,16 @@ class Folder(Base):
             return f'{self.parent_folder.full_path}/{self.name}'
         else:
             return self.name
+
+    def iter_docs(self, mol_type: str = None, recursive=False) -> Iterable["AnnotatedDocument"]:
+        for d in self.documents:
+            if mol_type is None or d.mol_type == mol_type:
+                yield d
+
+        if recursive:
+            for sub_dir in self.subfolders:
+                for d in sub_dir.iter_docs(mol_type, recursive):
+                    yield d
 
 
 class GUser(Base):
@@ -109,7 +120,7 @@ class AnnotatedDocument(Base):
     _plugin_document_xml = Column(Text, nullable=False, name='plugin_document_xml')
     reference_count = Column(Integer, nullable=False, default=0)
 
-    folder = relationship('Folder')
+    folder = relationship('Folder', back_populates='documents')
     g_users = relationship('GUser', secondary='document_read')
     file_datas = relationship('DocumentFileDatum', secondary='document_to_file_data')
 
@@ -174,7 +185,9 @@ class AnnotatedDocument(Base):
 
     @property
     def doc_name(self) -> str:
-        return self.xml['hiddenFields']['cache_name']
+        return self.xml['hiddenFields'].get('override_cache_name',
+                                            self.xml['hiddenFields'].get('cahce_name',
+                                                                         self.plugin_xml.get('name', '')))
 
     @doc_name.setter
     def doc_name(self, value: str):
