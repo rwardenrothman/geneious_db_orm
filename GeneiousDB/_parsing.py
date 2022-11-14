@@ -51,8 +51,10 @@ def unparse_interval_dict(fl: FeatureLocation) -> Union[list, Dict[str, str]]:
 
     if fl.strand == 1:
         out_dict['direction'] = 'leftToRight'
-    elif fl.strand == 0:
+    elif fl.strand == -1:
         out_dict['direction'] = 'rightToLeft'
+    else:
+        out_dict['direction'] = 'none'
 
     return out_dict
 
