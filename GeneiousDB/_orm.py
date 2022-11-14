@@ -243,6 +243,10 @@ class AnnotatedDocument(Base):
             self.xml['fields'] = {}
         self.xml['fields']['topology'] = 'linear' if value else 'circular'
 
+        if 'fields' not in self.plugin_xml:
+            self.plugin_xml['fields'] = {}
+        self.plugin_xml['fields']['isCircular'] = value
+
     @property
     def circular(self) -> bool:
         return not self.linear
