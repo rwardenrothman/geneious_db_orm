@@ -112,4 +112,4 @@ def unparse_annotations(feature: SeqFeature) -> dict:
         'description': description,
         'type': feature.type
     }
-    return {'annotation': out_dict}
+    return out_dict

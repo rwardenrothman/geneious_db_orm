@@ -172,7 +172,9 @@ class GeneiousDatabase(AbstractContextManager):
         base_doc.circular = record.annotations.get('topology', 'linear') == 'circular'
         base_doc.modified = record.annotations.get('date', None) or datetime.now()
         base_doc.doc_name = record.name
-        base_doc.plugin_xml['sequenceAnnotations'] = [unparse_annotations(f) for f in record.features]
+        if len(record.features) > 0:
+            base_doc.plugin_xml['sequenceAnnotations'] = {'annotation':
+                                                              [unparse_annotations(f) for f in record.features]}
 
         if not base_doc.urn:
             uuid_str = str(uuid4()).replace('-', '')
@@ -186,7 +188,7 @@ class GeneiousDatabase(AbstractContextManager):
         return base_doc
 
     def plasmid_from_seqrecord(self, record: SeqRecord, base_doc: AnnotatedDocument = None) -> AnnotatedDocument:
-        return self.from_SeqRecord(record, base_doc, 24999)
+        return self.from_SeqRecord(record, base_doc, 24994)
 
     def oligo_from_seqrecord(self, record: SeqRecord, base_doc: AnnotatedDocument = None) -> AnnotatedDocument:
         out_doc = self.from_SeqRecord(record, base_doc, 3898)
