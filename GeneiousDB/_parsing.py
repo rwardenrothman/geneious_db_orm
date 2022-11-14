@@ -81,8 +81,8 @@ def parse_qualifiers(q_data: Dict[str, List[Dict[str, str]]]) -> DefaultDict[str
 def unparse_qualifiers(q_data: Dict[str, List[str]]):
     out_list = []
     for key, value_list in q_data.items():
-        out_list.append({'qualifier': {'name': key, 'value': value_list[0]}})
-    return out_list
+        out_list.append({'name': key, 'value': value_list[0]})
+    return {'qualifier': out_list}
 
 
 def parse_annotation(a_data: dict, enforce_len: bool = False) -> SeqFeature:
