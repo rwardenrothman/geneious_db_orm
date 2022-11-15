@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='GeneiousDB',
-    version='0.8',
+    version='0.9',
     packages=['GeneiousDB'],
     url='',
     license='',

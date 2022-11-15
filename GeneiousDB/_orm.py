@@ -245,7 +245,7 @@ class AnnotatedDocument(Base):
 
         if 'fields' not in self.plugin_xml:
             self.plugin_xml['fields'] = {}
-        self.plugin_xml['fields']['isCircular'] = value
+        self.plugin_xml['fields']['isCircular'] = not value
 
     @property
     def circular(self) -> bool:
