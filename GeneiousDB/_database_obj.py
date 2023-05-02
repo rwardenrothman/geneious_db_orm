@@ -1,8 +1,9 @@
+from collections import Counter, defaultdict
 from contextlib import AbstractContextManager
 from datetime import datetime
 from tempfile import TemporaryDirectory
 from types import TracebackType
-from typing import Type, Optional, List
+from typing import Type, Optional, List, Dict
 import operator as op
 from subprocess import run
 from uuid import uuid4
@@ -16,18 +17,83 @@ import json
 
 from tqdm import tqdm
 
-from GeneiousDB._orm import SEARCH_FIELD_BY_TYPE, SFV, AnnotatedDocument, IntegerSearchFieldValue, LongSearchFieldValue, \
-    FloatSearchFieldValue, DoubleSearchFieldValue, StringSearchFieldValue, Folder
+from GeneiousDB._orm import SEARCH_FIELD_BY_TYPE, SFV, AnnotatedDocument, IntegerSearchFieldValue, \
+    LongSearchFieldValue, FloatSearchFieldValue, DoubleSearchFieldValue, StringSearchFieldValue, Folder, NextTableId, \
+    Base, IndexingQueue
 from GeneiousDB._parsing import parse_annotation, unparse_annotations
 
 
 class GeneiousDatabase(AbstractContextManager):
+    """
+    This class manages all the interactions between Python and Geneious.
+
+    GeneiousDatabase can be used as a standalone object or as a context manager. When used as a context manager, it will
+    handle opening and closing the database connection on its own. This is the recommended usage so that the connection
+    gets closed correctly.
+
+    Args:
+        secret_name (str): The name of the AWS secret that contains the database configuration
+
+    Attributes:
+        session (Session): The SQLAlchemy Session object. This should only be interacted with if this object cannot
+            perform the needed functionality
+        secret_name (str): The name of the AWS secret that contains the database configuration
+
+    Examples:
+        Retrieve all sequences from a folder::
+
+            records = []
+
+            with GeneiousDatabase(secret_name) as gdb:
+                folder = gdb.get_folder_by_name('LG Uploads')
+                for cur_doc in folder.iter_docs('DNA'):
+                    records.append(gdb.get_SeqRecord(cur_doc))
+
+        Add a genbank plasmid document to the database::
+
+            from Bio import SeqIO
+
+            new_record = SeqIO.read("path/to/document")
+            with GeneiousDatabase(secret_name) as gdb:
+                folder = gdb.get_folder_by_name('Folder Name')
+
+                new_doc = gdb.plasmid_from_seqrecord(new_record)
+                new_doc.folder = folder
+
+                gdb.add(new_doc)
+                gdb.commit()
+
+        Find all documents whose name contains "Uox"::
+
+            with GeneiousDatabase(secret_name) as gdb:
+                uox_docs = gdb.search_contains('name', 'Uox')
+
+        Add LabGuru information to a document::
+
+            from LabGuruAPI import Plasmid
+
+            lg_plasmid = Plasmid.from_name('pGRO-C1227')
+
+            with GeneiousDatabase(secret_name) as gdb:
+                plas_record = gdb.search_equal_to('name', lg_plasmid.name)[0]
+                plas_record.set_lg_info(
+                    url = lg_plasmid.url,
+                    collection = 'Plasmids',
+                    lg_id = lg_plasmid.id
+                )
+                plas_record.force_xml_updates()
+
+                gdb.commit()
+
+
+    """
 
     def __init__(self, secret_name: str) -> None:
         self.session: Optional[Session] = None
         self.secret_name = secret_name
-        self.search_field = ''
-        self.db_name = None
+        self._search_field = ''
+        self._db_name = None
+        self._new_objects = defaultdict(list)
 
     def __enter__(self) -> "GeneiousDatabase":
         return self.open()
@@ -47,8 +113,44 @@ class GeneiousDatabase(AbstractContextManager):
                  f"@{db_config['host']}:{db_config['port']}/{db_config['dbname']}"
         engine = create_engine(db_uri)
         self.session = Session(engine)
-        self.db_name = db_config['dbname']
+        self._db_name = db_config['dbname']
         return self
+
+    def add(self, obj: Base):
+        self._new_objects[obj.__tablename__].append(obj)
+
+    def delete(self, obj: Base):
+        self.session.delete(obj)
+
+    def commit(self):
+        # Reserve IDs
+        objs_to_add: List[Base] = []
+        reservations: Dict[int, IndexingQueue] = {}
+        for cur_table, new_objs in self._new_objects.items():
+            next_id_row = self.session.get(NextTableId, cur_table)
+            for cur_obj in new_objs:
+                cur_obj.id = int(next_id_row.next_id)
+                objs_to_add.append(cur_obj)
+                next_id_row.next_id += 1
+
+                if cur_table == 'annotated_document':
+                    reservations[cur_obj.id] = IndexingQueue(document_id=cur_obj.id, g_user_id=1)
+
+        # Commit reservation
+        self.session.commit()
+
+        # Add objects individually
+        for cur_obj in objs_to_add:
+            self.session.add(cur_obj)
+            self.session.add(reservations[cur_obj.id])
+            self.session.commit()
+            reservations[cur_obj.id].reserved = datetime.now()
+            self.session.commit()
+
+        # Remove reservations individually
+        for cur_res in reservations.values():
+            self.session.delete(cur_res)
+            self.session.commit()
 
     def close(self):
         if isinstance(self.session, Session):
@@ -104,7 +206,7 @@ class GeneiousDatabase(AbstractContextManager):
             return []
 
     def __getitem__(self, item: str) -> "GeneiousDatabase":
-        self.search_field = item
+        self._search_field = item
         return self
 
     @property
@@ -116,25 +218,25 @@ class GeneiousDatabase(AbstractContextManager):
         return self['modified_date']
 
     def __eq__(self, other) -> List[AnnotatedDocument]:
-        return self.search_equal_to(self.search_field, other)
+        return self.search_equal_to(self._search_field, other)
 
     def __gt__(self, other) -> List[AnnotatedDocument]:
-        return self.search_greater_than(self.search_field, other)
+        return self.search_greater_than(self._search_field, other)
 
     def __ge__(self, other) -> List[AnnotatedDocument]:
-        return self.search_greater_than_equal_to(self.search_field, other)
+        return self.search_greater_than_equal_to(self._search_field, other)
 
     def __lt__(self, other) -> List[AnnotatedDocument]:
-        return self.search_less_than(self.search_field, other)
+        return self.search_less_than(self._search_field, other)
 
     def __le__(self, other) -> List[AnnotatedDocument]:
-        return self.search_less_than_equal_to(self.search_field, other)
+        return self.search_less_than_equal_to(self._search_field, other)
 
     def __contains__(self, other) -> List[AnnotatedDocument]:
-        return self.search_contains(self.search_field, other)
+        return self.search_contains(self._search_field, other)
 
     def get_doc_path(self, doc: AnnotatedDocument) -> str:
-        return f'{self.db_name}:{doc.folder.full_path.replace("Server Documents/", "")}/{doc.doc_name}'
+        return f'{self._db_name}:{doc.folder.full_path.replace("Server Documents/", "")}/{doc.doc_name}'
 
     def get_SeqRecord(self, doc: AnnotatedDocument) -> SeqRecord:
         seq: str = doc.plugin_document_xml['XMLSerialisableRootElement']['charSequence']
@@ -204,12 +306,15 @@ class GeneiousDatabase(AbstractContextManager):
 
 
 if __name__ == '__main__':
-    gdb = GeneiousDatabase('GeneiousDB')
-    gdb.open()
-    f = gdb.get_folder_by_name('Foundry')
-    # for d in tqdm(list(f.iter_docs('DNA'))):
-    all_docs: List[AnnotatedDocument] = list(f.iter_docs(recursive=True))
-    d: AnnotatedDocument
-    for d in tqdm(all_docs):
-        tqdm.write(str((str(d.folder), str(d))))
-    gdb.close()
+    from Bio import SeqIO
+    with GeneiousDatabase('GeneiousDB') as gdb:
+        new_record = SeqIO.read(r"C:\Users\RobertWarden-Rothman\GRO Biosciences\Projects - Foundry\Workflow Development"
+                                r"\LG Updates\i7_A_Rev.gb", 'gb')
+        base_name = new_record.name
+        for i in range(20):
+            new_record.name = f'{base_name} Copy {i+1:d}'
+            new_doc = gdb.oligo_from_seqrecord(new_record)
+            new_doc.folder_id = 6827
+
+            gdb.add(new_doc)
+        gdb.commit()

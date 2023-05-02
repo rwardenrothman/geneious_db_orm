@@ -53,7 +53,7 @@ class NextTableId(Base):
 
 
 class SearchField(Base):
-    __tablename__ = 'search_field'
+    __tablename__ = '_search_field'
 
     code = Column(String(255), primary_key=True)
     field_xml = Column(Text, nullable=False)
@@ -108,8 +108,17 @@ class GUser(Base):
     primary_group = relationship('GGroup')
 
 
-
 class AnnotatedDocument(Base):
+    """
+    This class represents all document types in the Geneious database.
+
+    Attributes:
+        id (int): the database id of the document. Do not change this.
+        folder (Folder): the Folder that contains the document
+        modified (datetime): the time that the document was last modified.
+        urn (str): the URN of the Geneious object
+
+    """
     __tablename__ = 'annotated_document'
 
     id = Column(Integer, primary_key=True, nullable=True)
@@ -128,7 +137,16 @@ class AnnotatedDocument(Base):
     _plugin_xml_dict = {}
 
     @staticmethod
-    def get_next_id(s: Session):
+    def get_next_id(s: Session) -> int:
+        """
+        Returns the next available document id.
+
+        Args:
+            s (Session): a SQLAlchemy session
+
+        Returns:
+            int: the next id
+        """
         max_id = s.scalar(func.max(AnnotatedDocument.id))
         return max_id + 1
 
@@ -169,6 +187,9 @@ class AnnotatedDocument(Base):
                 self._plugin_document_xml = new_xml
 
     def force_xml_updates(self):
+        """
+        Forces the xml fields to update. It's a good idea to run this method before a commit
+        """
         new_xml = unparse(self._plugin_xml_dict, full_document=False, pretty=True)
         self._plugin_document_xml = new_xml
 
@@ -185,6 +206,9 @@ class AnnotatedDocument(Base):
 
     @property
     def doc_name(self) -> str:
+        """
+        The name of the document
+        """
         return self.xml['hiddenFields'].get('override_cache_name',
                                             self.xml['hiddenFields'].get('cahce_name',
                                                                          self.plugin_xml.get('name', '')))
@@ -198,6 +222,7 @@ class AnnotatedDocument(Base):
 
     @property
     def doc_urn(self) -> str:
+        """The document URN. If you need to change it. also set it here."""
         return self.xml['hiddenFields']['cache_urn']['#text']
 
     @doc_urn.setter
@@ -208,6 +233,7 @@ class AnnotatedDocument(Base):
 
     @property
     def accession(self) -> str:
+        """The accession number of the DNA object"""
         hf = self.xml['hiddenFields']
         if 'override_accession' in hf:
             return hf['override_accession']
@@ -225,6 +251,14 @@ class AnnotatedDocument(Base):
 
     @property
     def mol_type(self) -> str:
+        """
+        The geneious type of the document. This must be one of the following values:
+
+        - DNA
+        - RNA
+        - Primer
+        - Protein
+        """
         return self.xml['fields'].get('molType', self.xml['fields'].get('oligoType', self.xml['@class'].split('.')[-1]))
 
     @mol_type.setter
@@ -284,7 +318,7 @@ class AnnotatedDocument(Base):
         self.plugin_xml['description'] = value
 
     @property
-    def LGinfo(self) -> Optional[Dict[str, Any]]:
+    def lg_info(self) -> Optional[Dict[str, Any]]:
         try:
             for i in range(27):
                 cur_node = self.xml['notes']['note'][i]
@@ -297,7 +331,7 @@ class AnnotatedDocument(Base):
         except (KeyError, IndexError):
             return None
 
-    def setLGinfo(self, url: str, collection: str, lg_id: Union[int, str]):
+    def set_lg_info(self, url: str, collection: str, lg_id: Union[int, str]):
         lg_xml = f'<note code="RobWarden-Rothman-LabGuruInfo-1659621929188" type="note">' \
                  f'<LGLink>{url}</LGLink>' \
                  f'<Collection>{collection}</Collection>' \
@@ -319,7 +353,7 @@ class AnnotatedDocument(Base):
             elif isinstance(self.document_xml['document']['notes']['note'], dict):
                 old_note = self.document_xml['document']['notes']['note']
                 self.document_xml['document']['notes']['note'] = [old_note]
-                self.setLGinfo(url, collection, lg_id)
+                self.set_lg_info(url, collection, lg_id)
             else:
                 raise ValueError(f"Cannot handle notes like {repr(self.document_xml['document']['notes']['note'])}")
         else:
@@ -333,10 +367,10 @@ class AnnotatedDocument(Base):
         return f'<Annotated {self.mol_type} Document: {self.doc_name} ({self.id:d})>'
 
 
-class IndexingQueue(AnnotatedDocument):
+class IndexingQueue(Base):
     __tablename__ = 'indexing_queue'
 
-    document_id = Column(ForeignKey('annotated_document.id', ondelete='CASCADE'), primary_key=True)
+    document_id = Column(Integer, primary_key=True)
     g_user_id = Column(ForeignKey('g_user.id', ondelete='SET NULL'), index=True)
     reserved = Column(DateTime)
 
@@ -413,7 +447,7 @@ class BooleanSearchFieldValue(Base):
 
     id = Column(Integer, primary_key=True)
     annotated_document_id = Column(ForeignKey('annotated_document.id', ondelete='CASCADE'), nullable=False, index=True)
-    search_field_code = Column(ForeignKey('search_field.code', ondelete='CASCADE'), nullable=False, index=True)
+    search_field_code = Column(ForeignKey('_search_field.code', ondelete='CASCADE'), nullable=False, index=True)
     value = Column(Boolean, nullable=False)
 
     annotated_document = relationship('AnnotatedDocument')
@@ -425,7 +459,7 @@ class DateSearchFieldValue(Base):
 
     id = Column(Integer, primary_key=True)
     annotated_document_id = Column(ForeignKey('annotated_document.id', ondelete='CASCADE'), nullable=False, index=True)
-    search_field_code = Column(ForeignKey('search_field.code', ondelete='CASCADE'), nullable=False, index=True)
+    search_field_code = Column(ForeignKey('_search_field.code', ondelete='CASCADE'), nullable=False, index=True)
     value = Column(Date, nullable=False)
 
     annotated_document = relationship('AnnotatedDocument')
@@ -451,7 +485,7 @@ class DoubleSearchFieldValue(Base):
 
     id = Column(Integer, primary_key=True)
     annotated_document_id = Column(ForeignKey('annotated_document.id', ondelete='CASCADE'), nullable=False, index=True)
-    search_field_code = Column(ForeignKey('search_field.code', ondelete='CASCADE'), nullable=False, index=True)
+    search_field_code = Column(ForeignKey('_search_field.code', ondelete='CASCADE'), nullable=False, index=True)
     value = Column(Float(53), nullable=False)
 
     annotated_document = relationship('AnnotatedDocument')
@@ -463,7 +497,7 @@ class FloatSearchFieldValue(Base):
 
     id = Column(Integer, primary_key=True)
     annotated_document_id = Column(ForeignKey('annotated_document.id', ondelete='CASCADE'), nullable=False, index=True)
-    search_field_code = Column(ForeignKey('search_field.code', ondelete='CASCADE'), nullable=False, index=True)
+    search_field_code = Column(ForeignKey('_search_field.code', ondelete='CASCADE'), nullable=False, index=True)
     value = Column(Float, nullable=False)
 
     annotated_document = relationship('AnnotatedDocument')
@@ -478,7 +512,7 @@ class IntegerSearchFieldValue(IntSearchFieldValue):
 
     id = Column(Integer, primary_key=True)
     annotated_document_id = Column(ForeignKey('annotated_document.id', ondelete='CASCADE'), nullable=False, index=True)
-    search_field_code = Column(ForeignKey('search_field.code', ondelete='CASCADE'), nullable=False, index=True)
+    search_field_code = Column(ForeignKey('_search_field.code', ondelete='CASCADE'), nullable=False, index=True)
     value = Column(Integer, nullable=False)
 
     annotated_document = relationship('AnnotatedDocument')
@@ -490,7 +524,7 @@ class LongSearchFieldValue(IntSearchFieldValue):
 
     id = Column(Integer, primary_key=True)
     annotated_document_id = Column(ForeignKey('annotated_document.id', ondelete='CASCADE'), nullable=False, index=True)
-    search_field_code = Column(ForeignKey('search_field.code', ondelete='CASCADE'), nullable=False, index=True)
+    search_field_code = Column(ForeignKey('_search_field.code', ondelete='CASCADE'), nullable=False, index=True)
     value = Column(BigInteger, nullable=False)
 
     annotated_document = relationship('AnnotatedDocument')
@@ -502,7 +536,7 @@ class StringSearchFieldValue(Base):
 
     id = Column(Integer, primary_key=True)
     annotated_document_id = Column(ForeignKey('annotated_document.id', ondelete='CASCADE'), nullable=False, index=True)
-    search_field_code = Column(ForeignKey('search_field.code', ondelete='CASCADE'), nullable=False, index=True)
+    search_field_code = Column(ForeignKey('_search_field.code', ondelete='CASCADE'), nullable=False, index=True)
     value = Column(Text, nullable=False)
 
     annotated_document = relationship('AnnotatedDocument')
