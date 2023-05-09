@@ -210,7 +210,7 @@ class AnnotatedDocument(Base):
         The name of the document
         """
         return self.xml['hiddenFields'].get('override_cache_name',
-                                            self.xml['hiddenFields'].get('cahce_name',
+                                            self.xml['hiddenFields'].get('cache_name',
                                                                          self.plugin_xml.get('name', '')))
 
     @doc_name.setter
@@ -218,6 +218,7 @@ class AnnotatedDocument(Base):
         if 'hiddenFields' not in self.xml:
             self.xml['hiddenFields'] = {}
         self.xml['hiddenFields']['cache_name'] = value
+        self.xml['hiddenFields']['override_cache_name'] = value
         self.plugin_xml['name'] = value
 
     @property

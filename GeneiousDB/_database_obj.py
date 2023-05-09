@@ -174,7 +174,7 @@ class GeneiousDatabase(AbstractContextManager):
             return []
 
     def search_equal_to(self, field_name: str, value, search_class: Type[SFV] = None):
-        return self.search(field_name, value, search_class, op.eq)
+        return self.search(field_name, value.upper(), search_class, op.eq)
 
     def search_greater_than(self, field_name: str, value, search_class: Type[SFV] = None):
         return self.search(field_name, value, search_class, op.gt)
@@ -204,6 +204,13 @@ class GeneiousDatabase(AbstractContextManager):
             return [v.annotated_document for v in vals]
         else:
             return []
+
+    def string_search_name_from_id(self, id: int):
+        stmt = select(StringSearchFieldValue).where(StringSearchFieldValue.annotated_document_id == id).where(StringSearchFieldValue.search_field_code == 'cache_name')
+        return self.session.scalars(stmt).all()
+    def string_search_content_from_id(self, id: int):
+        stmt = select(StringSearchFieldValue).where(StringSearchFieldValue.annotated_document_id == id).where(StringSearchFieldValue.search_field_code == 'content')
+        return self.session.scalars(stmt).all()
 
     def __getitem__(self, item: str) -> "GeneiousDatabase":
         self._search_field = item
@@ -306,15 +313,28 @@ class GeneiousDatabase(AbstractContextManager):
 
 
 if __name__ == '__main__':
-    from Bio import SeqIO
+    # from Bio import SeqIO
+    # with GeneiousDatabase('GeneiousDB') as gdb:
+    #     new_record = SeqIO.read(r"C:\Users\RobertWarden-Rothman\GRO Biosciences\Projects - Foundry\Workflow Development"
+    #                             r"\LG Updates\i7_A_Rev.gb", 'gb')
+    #     base_name = new_record.name
+    #     for i in range(20):
+    #         new_record.name = f'{base_name} Copy {i+1:d}'
+    #         new_doc = gdb.oligo_from_seqrecord(new_record)
+    #         new_doc.folder_id = 6827
+    #
+    #         gdb.add(new_doc)
+    #     gdb.commit()
+    old_name = 'testupdate'
+    new_name = 'newly-updated-name'
     with GeneiousDatabase('GeneiousDB') as gdb:
-        new_record = SeqIO.read(r"C:\Users\RobertWarden-Rothman\GRO Biosciences\Projects - Foundry\Workflow Development"
-                                r"\LG Updates\i7_A_Rev.gb", 'gb')
-        base_name = new_record.name
-        for i in range(20):
-            new_record.name = f'{base_name} Copy {i+1:d}'
-            new_doc = gdb.oligo_from_seqrecord(new_record)
-            new_doc.folder_id = 6827
+        cur_up_an_doc = gdb.search_contains('name', new_name)[0]
+        search_string = gdb.string_search_name_from_id(cur_up_an_doc.id)[0]
+        search_content = gdb.string_search_content_from_id(cur_up_an_doc.id)[0]
 
-            gdb.add(new_doc)
+        cur_up_an_doc.doc_name = new_name
+        search_string.value = new_name.upper()
+        search_content.value = search_content.value.replace(old_name.upper(), new_name.upper())
+        search_content.value = search_content.value.upper()
+        cur_up_an_doc.force_xml_updates()
         gdb.commit()
