@@ -247,10 +247,13 @@ class GeneiousDatabase(AbstractContextManager):
 
     def get_SeqRecord(self, doc: AnnotatedDocument) -> SeqRecord:
         seq: str = doc.plugin_document_xml['XMLSerialisableRootElement']['charSequence']
-        features = [parse_annotation(a) for a in
-                    doc.plugin_document_xml['XMLSerialisableRootElement']['sequenceAnnotations']['annotation']
-                    if a.get('intervals') is not None and a.get('qualifiers') is not None]
-        desc = doc.plugin_document_xml['XMLSerialisableRootElement'].get('description', '')
+        try:
+            features = [parse_annotation(a) for a in
+                        doc.plugin_document_xml['XMLSerialisableRootElement']['sequenceAnnotations']['annotation']
+                        if a.get('intervals') is not None and a.get('qualifiers') is not None]
+        except KeyError:
+            features = []
+        desc = doc.plugin_document_xml['XMLSerialisableRootElement'].get('description', doc.doc_name)
         annotations = {
             'molecule_type': doc.mol_type,
             'topology': 'circular' if doc.circular else 'linear',
