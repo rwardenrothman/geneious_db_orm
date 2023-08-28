@@ -6,11 +6,15 @@ from typing import Dict, Type, TypeVar, Optional, Any, Union, List, Iterable
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey, Integer, \
     String, Table, Text, text, func
 from sqlalchemy.dialects.postgresql import OID
-from sqlalchemy.orm import relationship, Session, backref
+from sqlalchemy.ext.asyncio import AsyncAttrs
+from sqlalchemy.orm import relationship, Session, backref, DeclarativeBase, Mapped
 from sqlalchemy.ext.declarative import declarative_base, AbstractConcreteBase
 from xmltodict import parse, unparse
 
-Base = declarative_base()
+
+class Base(AsyncAttrs, DeclarativeBase):
+    pass
+
 metadata = Base.metadata
 
 
@@ -73,9 +77,9 @@ class Folder(Base):
     name = Column(String(255), index=True)
 
     g_group = relationship('GGroup')
-    subfolders: List["Folder"] = relationship('Folder', backref=backref('parent_folder', remote_side=[id]))
+    subfolders: Mapped[List["Folder"]] = relationship('Folder', backref=backref('parent_folder', remote_side=[id]))
     users = relationship('GUser', secondary='hidden_folder_to_user')
-    documents: List["AnnotatedDocument"] = relationship('AnnotatedDocument', back_populates='folder')
+    documents: Mapped[List["AnnotatedDocument"]] = relationship('AnnotatedDocument', back_populates='folder')
 
     def __str__(self):
         return f"<Folder: {self.full_path}>"

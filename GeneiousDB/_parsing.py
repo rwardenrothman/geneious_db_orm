@@ -39,6 +39,8 @@ def unparse_interval_dict(fl: FeatureLocation) -> Union[list, Dict[str, str]]:
     if isinstance(fl, CompoundLocation):
         return [unparse_interval_dict(loc) for loc in fl.parts]
 
+    fl = fl or FeatureLocation(1, 1)
+
     out_dict = {
         'minimumIndex': fl.start + 1,
         'maximumIndex': fl.end + 0
@@ -75,8 +77,27 @@ def parse_qualifiers(q_data: Dict[str, List[Dict[str, str]]]) -> DefaultDict[str
                     else:
                         out_dict[q_name].append(str(v))
     elif isinstance(q_data['qualifier'], dict):
-        q = q_data['qualifier']
-        out_dict[q['name']].append(q['value'])
+        q: dict = q_data['qualifier']
+
+        if 'name' not in q:
+            return out_dict
+
+        if 'value' in q:
+            out_dict[q['name']].append(q['value'])
+        elif len(q) == 1:
+            out_dict[q['name']].append('')
+        elif len(q) == 2:
+            other_key = list(set(q.keys()) - {'name'})[0]
+            q_val = q[other_key]
+            if isinstance(q_val, str):
+                out_dict[q['name']].append(q_val)
+            elif isinstance(q_val, dict) and '#text' in q_val:
+                out_dict[q['name']].append(q_val['#text'])
+    # remove hidden annotations
+    keys_to_remove = [k for k in out_dict.keys() if '.hidden' in k]
+    for k in keys_to_remove:
+        del out_dict[k]
+
     return out_dict
 
 
