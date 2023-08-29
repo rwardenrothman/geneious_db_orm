@@ -2,11 +2,11 @@ import asyncio
 import time
 from asyncio.proactor_events import _ProactorBasePipeTransport
 from collections import Counter, defaultdict
-from contextlib import AbstractContextManager, AbstractAsyncContextManager
+from contextlib import AbstractContextManager, AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime
 from tempfile import TemporaryDirectory
 from types import TracebackType
-from typing import Type, Optional, List, Dict, Set
+from typing import Type, Optional, List, Dict, Set, AsyncGenerator
 import operator as op
 from subprocess import run
 from uuid import uuid4
@@ -372,7 +372,7 @@ class AsyncGeneiousDatabase(GeneiousDatabase):
     def __init__(self, secret_name: str, pool_size=5, max_overflow=10) -> None:
         super().__init__(secret_name)
         self._lock = None
-        self._limit = None
+        self._limit: Optional[asyncio.Semaphore] = None
         self.engine = None
         self.session_maker = None
         self.open_sessions: List[AsyncSession] = []
@@ -414,15 +414,24 @@ class AsyncGeneiousDatabase(GeneiousDatabase):
     def session(self, value):
         pass
 
+    @asynccontextmanager
+    async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
+        await self._limit.acquire()
+        try:
+            yield self.session
+        finally:
+            self._limit.release()
+
+
     async def search(self, field_name: str, value, search_class: Type[SFV] = None,
                      operator=op.eq) -> List[AnnotatedDocument]:
-        async with self._limit:
+        async with self.get_session() as cur_session:
             search_class: Type[SFV] = search_class if search_class else SEARCH_FIELD_BY_TYPE[type(value)]
             stmt = select(search_class) \
                 .where(search_class.search_field_code == field_name) \
                 .where(operator(search_class.value, value))
 
-            cur_session = self.session
+            # cur_session = self.session
             vals = (await cur_session.scalars(stmt)).fetchall()
 
             if vals:
@@ -447,10 +456,10 @@ class AsyncGeneiousDatabase(GeneiousDatabase):
             for c_sess in self.open_sessions:
                 await c_sess.commit()
 
+        async with self.get_session() as cur_session:
             # Reserve IDs
             objs_to_add: List[Base] = []
             reservations: Dict[int, IndexingQueue] = {}
-            cur_session = self.session
             for cur_table, new_objs in self._new_objects.items():
                 next_id_row = await cur_session.get(NextTableId, cur_table)
                 for cur_obj in new_objs:
@@ -486,8 +495,8 @@ class AsyncGeneiousDatabase(GeneiousDatabase):
 
     async def from_SeqRecord(self, record: SeqRecord, base_doc: AnnotatedDocument = None,
                              template_id: int = 24994) -> AnnotatedDocument:
-        cur_session = self.session
-        xml_template: Optional[AnnotatedDocument] = await cur_session.get(AnnotatedDocument, template_id)
+        async with self.get_session() as cur_session:
+            xml_template: Optional[AnnotatedDocument] = await cur_session.get(AnnotatedDocument, template_id)
 
         base_doc = await self._process_seqrecord(base_doc, record, xml_template)
         # base_doc.id = await AnnotatedDocument.async_get_next_id(cur_session)
@@ -507,11 +516,11 @@ class AsyncGeneiousDatabase(GeneiousDatabase):
 
         # Update existing rows
         async def _update_existing(cur_table: Type[SFV]) -> Set[str]:
-            async with self._limit:
+            async with self.get_session() as cur_session:
                 table_codes = set()
                 query = select(cur_table).where(cur_table.search_field_code.in_(populated_codes),
                                                 cur_table.annotated_document == ad)
-                result = (await self.session.scalars(query)).all()
+                result = (await cur_session.scalars(query)).all()
                 for cur_row in result:
                     cur_row.value = values_by_code[cur_row.search_field_code]
                     table_codes.add(cur_row.search_field_code)
@@ -534,7 +543,7 @@ class AsyncGeneiousDatabase(GeneiousDatabase):
 
     def __getattribute__(self, item):
         cur_attr = object.__getattribute__(self, item)
-        if item in ['get_doc_by_id']:
+        if item in ['get_doc_by_id', 'get_session']:
             return cur_attr
         if inspect.ismethod(cur_attr) and not inspect.iscoroutinefunction(cur_attr):
             async def _wrapper(*args, **kwargs):
@@ -558,15 +567,13 @@ if __name__ == '__main__':
 
     async def _main(*names: str):
         async with GeneiousDatabase('GeneiousDB') as gdb:
-            new_item_record = pyd.read(r"C:\Users\RobertWarden-Rothman\GRO Biosciences\Projects - Foundry"
-                                       r"\Collaborations\1278- AS - AChR HTP Quikchange 2\base_plasmids\pGRO-C1773.gb")
-            new_item: AnnotatedDocument = await gdb.plasmid_from_seqrecord(new_item_record)
-            new_item.folder_id = 8577
-            await gdb.update_search_fields(new_item)
-            await gdb.add(new_item)
+            results = await tqdm_asyncio.gather(*[find_doc(gdb, n) for n in names])
 
             await gdb.commit()
-            print(repr(new_item))
-            print(new_item.id)
 
-    asyncio.run(_main())
+        return results
+
+    docs = asyncio.run(_main(*[f"CXr-a-{i+1:02d}" for i in range(20)]))
+    for d in chain(*docs):
+        if d:
+            print(d.doc_name)
