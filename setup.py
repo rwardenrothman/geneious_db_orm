@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='GeneiousDB',
-    version='1.0.3',
+    version='2.0.0',
     packages=['GeneiousDB'],
     url='',
     license='',
@@ -15,6 +15,7 @@ setup(
         'xmltodict',
         'biopython',
         'tqdm',
-        'psycopg2-binary'
+        'psycopg2-binary',
+        'asyncpg'
     ]
 )

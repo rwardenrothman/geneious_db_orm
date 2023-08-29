@@ -1,11 +1,12 @@
 import asyncio
+import time
 from asyncio.proactor_events import _ProactorBasePipeTransport
 from collections import Counter, defaultdict
 from contextlib import AbstractContextManager, AbstractAsyncContextManager
 from datetime import datetime
 from tempfile import TemporaryDirectory
 from types import TracebackType
-from typing import Type, Optional, List, Dict
+from typing import Type, Optional, List, Dict, Set
 import operator as op
 from subprocess import run
 from uuid import uuid4
@@ -292,10 +293,16 @@ class GeneiousDatabase(AbstractContextManager, AbstractAsyncContextManager):
 
     def from_SeqRecord(self, record: SeqRecord, base_doc: AnnotatedDocument = None, template_id: int = 24994
                        ) -> AnnotatedDocument:
+        xml_template: Optional[AnnotatedDocument] = self.session.get(AnnotatedDocument, template_id)
+
+        base_doc = self._process_seqrecord(base_doc, record, xml_template)
+        # base_doc.id = AnnotatedDocument.get_next_id(self.session)
+        return base_doc
+
+    def _process_seqrecord(self, base_doc, record, xml_template):
         if base_doc is None:
             # base_doc = AnnotatedDocument()
             base_doc = AnnotatedDocument()
-            xml_template: AnnotatedDocument = self.session.get(AnnotatedDocument, template_id)
 
             k: str
             for k in xml_template.xml.keys():
@@ -304,7 +311,6 @@ class GeneiousDatabase(AbstractContextManager, AbstractAsyncContextManager):
             # for k in xml_template.plugin_xml.keys():
             #     if k.startswith('@'):
             #         base_doc.plugin_xml[k] = xml_template.plugin_xml[k]
-
         base_doc.description = record.description
         base_doc.sequence_str = str(record.seq)
         base_doc.mol_type = record.annotations.get('molecule_type', '')
@@ -314,15 +320,12 @@ class GeneiousDatabase(AbstractContextManager, AbstractAsyncContextManager):
         if len(record.features) > 0:
             base_doc.plugin_xml['sequenceAnnotations'] = {'annotation': [unparse_annotations(f) for f in record.features
                                                                          if f.location is not None]}
-
         if not base_doc.urn:
             uuid_str = str(uuid4()).replace('-', '')
             new_urn = f'urn:local:biofoundry:{uuid_str[:3]}-{uuid_str[-7:]}'
             base_doc.urn = new_urn
             base_doc.doc_urn = new_urn
-
         base_doc.force_xml_updates()
-        base_doc.id = AnnotatedDocument.get_next_id(self.session)
         base_doc.modified = datetime.now()
         return base_doc
 
@@ -340,6 +343,28 @@ class GeneiousDatabase(AbstractContextManager, AbstractAsyncContextManager):
 
     def get_folders_by_name(self, folder_name: str) -> List[Folder]:
         return self.session.scalars(select(Folder).where(Folder.name == folder_name)).all()
+
+    def update_search_fields(self, ad: AnnotatedDocument):
+        populated_fields = ad.get_search_values()
+        populated_codes = {v[0] for v in populated_fields}
+        types_by_code = {v[0]: v[1] for v in populated_fields}
+        values_by_code = {v[0]: v[2].upper() if isinstance(v[2], str) else v[2] for v in populated_fields}
+
+        # Update existing rows
+        updated_codes = set()
+        for cur_table in StringSearchFieldValue, IntegerSearchFieldValue:
+            result = self.session.query(cur_table).where(cur_table.search_field_code.in_(populated_codes)).all()
+            for cur_row in result:
+                cur_row.value = values_by_code[cur_row.search_field_code]
+                updated_codes.add(cur_row.search_field_code)
+
+        # Add new rows
+        new_codes = populated_codes - updated_codes
+        for cur_code in new_codes:
+            new_item_type: Type[SFV] = types_by_code[cur_code]
+            new_item = new_item_type(anotated_document=self, search_field_code=cur_code)
+            new_item.value = values_by_code[cur_code]
+            self.add(new_item)
 
 
 class AsyncGeneiousDatabase(GeneiousDatabase):
@@ -442,10 +467,12 @@ class AsyncGeneiousDatabase(GeneiousDatabase):
             # Add objects individually
             for cur_obj in objs_to_add:
                 cur_session.add(cur_obj)
-                cur_session.add(reservations[cur_obj.id])
+                if cur_obj.id in reservations:
+                    cur_session.add(reservations[cur_obj.id])
                 await cur_session.commit()
-                reservations[cur_obj.id].reserved = datetime.now()
-                await cur_session.commit()
+                if cur_obj.id in reservations:
+                    reservations[cur_obj.id].reserved = datetime.now()
+                    await cur_session.commit()
 
             # Remove reservations individually
             for cur_res in reservations.values():
@@ -457,8 +484,58 @@ class AsyncGeneiousDatabase(GeneiousDatabase):
             await c_sess.close()
         await self.engine.dispose()
 
+    async def from_SeqRecord(self, record: SeqRecord, base_doc: AnnotatedDocument = None,
+                             template_id: int = 24994) -> AnnotatedDocument:
+        cur_session = self.session
+        xml_template: Optional[AnnotatedDocument] = await cur_session.get(AnnotatedDocument, template_id)
+
+        base_doc = await self._process_seqrecord(base_doc, record, xml_template)
+        # base_doc.id = await AnnotatedDocument.async_get_next_id(cur_session)
+        return base_doc
+
+    async def oligo_from_seqrecord(self, record: SeqRecord, base_doc: AnnotatedDocument = None) -> AnnotatedDocument:
+        out_doc = await self.from_SeqRecord(record, base_doc, 3898)
+        out_doc.xml['fields']['oligoType'] = 'Primer'
+        out_doc.force_xml_updates()
+        return out_doc
+
+    async def update_search_fields(self, ad: AnnotatedDocument):
+        populated_fields = ad.get_search_values()
+        populated_codes = {v[0] for v in populated_fields}
+        types_by_code = {v[0]: v[1] for v in populated_fields}
+        values_by_code = {v[0]: v[2].upper() if isinstance(v[2], str) else v[2] for v in populated_fields}
+
+        # Update existing rows
+        async def _update_existing(cur_table: Type[SFV]) -> Set[str]:
+            async with self._limit:
+                table_codes = set()
+                query = select(cur_table).where(cur_table.search_field_code.in_(populated_codes),
+                                                cur_table.annotated_document == ad)
+                result = (await self.session.scalars(query)).all()
+                for cur_row in result:
+                    cur_row.value = values_by_code[cur_row.search_field_code]
+                    table_codes.add(cur_row.search_field_code)
+                return table_codes
+
+        updated_codes = set()
+        if ad.id:
+            potential_tables = set(types_by_code.values())
+            for cur_code_set in await asyncio.gather(*[_update_existing(t) for t in potential_tables]):
+                updated_codes |= cur_code_set
+
+        # Add new rows
+        new_codes = populated_codes - updated_codes
+        for cur_code in new_codes:
+            new_item_type: Type[SFV] = types_by_code[cur_code]
+            new_item = new_item_type(search_field_code=cur_code)
+            new_item.annotated_document = ad
+            new_item.value = values_by_code[cur_code]
+            await self.add(new_item)
+
     def __getattribute__(self, item):
         cur_attr = object.__getattribute__(self, item)
+        if item in ['get_doc_by_id']:
+            return cur_attr
         if inspect.ismethod(cur_attr) and not inspect.iscoroutinefunction(cur_attr):
             async def _wrapper(*args, **kwargs):
                 r_val = cur_attr(*args, **kwargs)
@@ -470,6 +547,7 @@ class AsyncGeneiousDatabase(GeneiousDatabase):
 if __name__ == '__main__':
     from tqdm.asyncio import tqdm_asyncio
     from itertools import chain, cycle
+    import pydna.all as pyd
 
 
     async def find_doc(adb: AsyncGeneiousDatabase, name: str):
@@ -480,13 +558,15 @@ if __name__ == '__main__':
 
     async def _main(*names: str):
         async with GeneiousDatabase('GeneiousDB') as gdb:
-            results = await tqdm_asyncio.gather(*[find_doc(gdb, n) for n in names])
+            new_item_record = pyd.read(r"C:\Users\RobertWarden-Rothman\GRO Biosciences\Projects - Foundry"
+                                       r"\Collaborations\1278- AS - AChR HTP Quikchange 2\base_plasmids\pGRO-C1773.gb")
+            new_item: AnnotatedDocument = await gdb.plasmid_from_seqrecord(new_item_record)
+            new_item.folder_id = 8577
+            await gdb.update_search_fields(new_item)
+            await gdb.add(new_item)
 
             await gdb.commit()
+            print(repr(new_item))
+            print(new_item.id)
 
-        return results
-
-    docs = asyncio.run(_main(*[f"CXr-a-{i+1:02d}" for i in range(20)]))
-    for d in chain(*docs):
-        if d:
-            print(d.doc_name)
+    asyncio.run(_main())

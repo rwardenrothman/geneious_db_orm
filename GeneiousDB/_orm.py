@@ -1,12 +1,12 @@
 # coding: utf-8
 from datetime import datetime
 from functools import lru_cache
-from typing import Dict, Type, TypeVar, Optional, Any, Union, List, Iterable
+from typing import Dict, Type, TypeVar, Optional, Any, Union, List, Iterable, Tuple
 
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey, Integer, \
     String, Table, Text, text, func
 from sqlalchemy.dialects.postgresql import OID
-from sqlalchemy.ext.asyncio import AsyncAttrs
+from sqlalchemy.ext.asyncio import AsyncAttrs, AsyncSession
 from sqlalchemy.orm import relationship, Session, backref, DeclarativeBase, Mapped
 from sqlalchemy.ext.declarative import declarative_base, AbstractConcreteBase
 from xmltodict import parse, unparse
@@ -152,6 +152,20 @@ class AnnotatedDocument(Base):
             int: the next id
         """
         max_id = s.scalar(func.max(AnnotatedDocument.id))
+        return max_id + 1
+
+    @staticmethod
+    async def async_get_next_id(s: AsyncSession) -> int:
+        """
+        Returns the next available document id using the asyncio interface.
+
+        Args:
+            s (AsyncSession): an asynchronous SQLAlchemy session
+
+        Returns:
+            int: the next id
+        """
+        max_id = await s.scalar(func.max(AnnotatedDocument.id))
         return max_id + 1
 
     @property
@@ -368,6 +382,41 @@ class AnnotatedDocument(Base):
 
         # self.document_xml = self.document_xml.copy()
 
+    def _get_doc_class_value(self) -> Optional[str]:
+        mol_type = self.mol_type
+        if mol_type == 'Protein':
+            return 'Amino Acid Sequence'
+        if mol_type == 'DNA':
+            return 'Nucleotide Sequence'
+        if mol_type == 'RNA':
+            return 'Nucleotide Sequence'
+        if mol_type == 'Primer':
+            return 'Oligonucleotide (Primer/Probe)'
+        return None
+
+    def get_search_values(self) -> List[Tuple[str, Type[Base], Any]]:
+        fields_to_update = [
+            ('cache_name', StringSearchFieldValue, self.doc_name),
+            ('sequence_length', IntegerSearchFieldValue, len(self.sequence_str)),
+            ('documentclass', StringSearchFieldValue, self._get_doc_class_value()),
+            ('description', StringSearchFieldValue, self.description),
+            ('display_urn', StringSearchFieldValue, self.doc_urn),
+            ('topology', StringSearchFieldValue, 'linear' if self.linear else 'circular'),
+            ('molType', StringSearchFieldValue, self.mol_type),
+            ('accession', StringSearchFieldValue, self.accession),
+        ]
+
+        lg_info = self.lg_info
+        if lg_info:
+            fields_to_update += [
+                ('RobWarden-Rothman-LabGuruInfo-1659621929188.ID', IntegerSearchFieldValue, lg_info['id']),
+                ('RobWarden-Rothman-LabGuruInfo-1659621929188.LGLink', StringSearchFieldValue, lg_info['url']),
+                ('RobWarden-Rothman-LabGuruInfo-1659621929188.Collection', StringSearchFieldValue,
+                 lg_info['collection']),
+            ]
+
+        return [v for v in fields_to_update if v[2] is not None]
+
     def __str__(self):
         return f'<Annotated {self.mol_type} Document: {self.doc_name} ({self.id:d})>'
 
@@ -547,8 +596,36 @@ class StringSearchFieldValue(Base):
     annotated_document = relationship('AnnotatedDocument')
     search_field = relationship('SearchField')
 
+    @staticmethod
+    def get_next_id(s: Session) -> int:
+        """
+        Returns the next available document id.
 
-SFV = TypeVar('SFV', bound=Base)
+        Args:
+            s (Session): a SQLAlchemy session
+
+        Returns:
+            int: the next id
+        """
+        max_id = s.scalar(func.max(StringSearchFieldValue.id))
+        return max_id + 1
+
+    @staticmethod
+    async def async_get_next_id(s: AsyncSession) -> int:
+        """
+        Returns the next available document id using the asyncio interface.
+
+        Args:
+            s (AsyncSession): an asynchronous SQLAlchemy session
+
+        Returns:
+            int: the next id
+        """
+        max_id = await s.scalar(func.max(StringSearchFieldValue.id))
+        return max_id + 1
+
+
+SFV = Union[BooleanSearchFieldValue, DateSearchFieldValue, DoubleSearchFieldValue, IntegerSearchFieldValue, StringSearchFieldValue]
 
 SEARCH_FIELD_BY_TYPE: Dict[type, Type[SFV]] = {
     bool: BooleanSearchFieldValue,

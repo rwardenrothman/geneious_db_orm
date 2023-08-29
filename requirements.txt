@@ -1,8 +1,9 @@
-SQLAlchemy~=1.4.41
-boto3~=1.24.77
-typer~=0.6.1
-setuptools~=60.2.0
-xmltodict~=0.13.0
-biopython~=1.81
-tqdm~=4.65.0
+SQLAlchemy
+boto3
+typer
+setuptools
+xmltodict
+biopython
+tqdm
 psycopg2-binary
+asyncpg
