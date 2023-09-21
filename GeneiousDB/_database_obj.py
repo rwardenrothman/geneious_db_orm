@@ -344,6 +344,30 @@ class GeneiousDatabase(AbstractContextManager, AbstractAsyncContextManager):
     def get_folders_by_name(self, folder_name: str) -> List[Folder]:
         return self.session.scalars(select(Folder).where(Folder.name == folder_name)).all()
 
+    def get_docs_by_name(self, doc_name: str, doc_folder_name: str = None) -> List[AnnotatedDocument]:
+        """
+        Args:
+            doc_name: The name of the document to search for.
+            doc_folder_name: The name of the folder to limit the search scope to.
+
+        Returns:
+            A list of `AnnotatedDocument` objects that match the given document name and folder name. If no matching
+            documents are found, an empty list is returned.
+        """
+        for tag in ['override_cache_name', 'cache_name', 'name']:
+            query = select(AnnotatedDocument).where(
+                AnnotatedDocument._document_xml.contains(f"<{tag}>{doc_name}</{tag}>")
+            )
+
+            if doc_folder_name:
+                query = query.join(Folder).where(Folder.name == doc_folder_name)
+
+            out_docs = self.session.scalars(query).all()
+            if out_docs:
+                return out_docs
+
+            return []
+
     def update_search_fields(self, ad: AnnotatedDocument):
         populated_fields = ad.get_search_values()
         populated_codes = {v[0] for v in populated_fields}
@@ -418,8 +442,11 @@ class AsyncGeneiousDatabase(GeneiousDatabase):
     async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
         await self._limit.acquire()
         try:
-            yield self.session
+            c_session = self.session
+            yield c_session
         finally:
+            await c_session.close()
+            self.open_sessions.remove(c_session)
             self._limit.release()
 
 
@@ -508,6 +535,24 @@ class AsyncGeneiousDatabase(GeneiousDatabase):
         out_doc.force_xml_updates()
         return out_doc
 
+    async def get_docs_by_name(self, doc_name: str, doc_folder_name: str = None) -> List[AnnotatedDocument]:
+        out_docs = []
+        async with self.get_session() as cur_session:
+            for tag in ['override_cache_name', 'cache_name', 'name']:
+                query = select(AnnotatedDocument).where(
+                    AnnotatedDocument._document_xml.contains(f"<{tag}>{doc_name}</{tag}>")
+                )
+
+                if doc_folder_name:
+                    query = query.join(Folder).where(Folder.name == doc_folder_name)
+
+                queried_docs = (await cur_session.scalars(query)).fetchall()
+                if queried_docs:
+                    out_docs = queried_docs
+                    break
+
+        return out_docs
+
     async def update_search_fields(self, ad: AnnotatedDocument):
         populated_fields = ad.get_search_values()
         populated_codes = {v[0] for v in populated_fields}
@@ -560,20 +605,20 @@ if __name__ == '__main__':
 
 
     async def find_doc(adb: AsyncGeneiousDatabase, name: str):
-        docs: List[AnnotatedDocument] = await adb.search_equal_to('cache_name', name.upper())
-        for d in docs:
-            d.folder_id = 8577
+        docs: List[AnnotatedDocument] = await adb.get_docs_by_name(name, 'LG Upload')
+        # for d in docs:
+        #     d.folder_id = 8577
         return docs
 
     async def _main(*names: str):
         async with GeneiousDatabase('GeneiousDB') as gdb:
             results = await tqdm_asyncio.gather(*[find_doc(gdb, n) for n in names])
 
-            await gdb.commit()
+            # await gdb.commit()
 
         return results
 
-    docs = asyncio.run(_main(*[f"CXr-a-{i+1:02d}" for i in range(20)]))
+    docs = asyncio.run(_main(*[f"{i+2056:02d}" for i in range(20)]))
     for d in chain(*docs):
         if d:
             print(d.doc_name)
