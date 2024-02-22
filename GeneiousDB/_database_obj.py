@@ -281,7 +281,7 @@ class GeneiousDatabase(AbstractContextManager, AbstractAsyncContextManager):
                         if a.get('intervals') is not None and a.get('qualifiers') is not None]
         except KeyError:
             features = []
-        desc = doc.description
+        desc = doc.description or doc.doc_name
         annotations = {
             'molecule_type': doc.mol_type,
             'topology': 'circular' if doc.circular else 'linear',
