@@ -366,7 +366,7 @@ class GeneiousDatabase(AbstractContextManager, AbstractAsyncContextManager):
             if out_docs:
                 return out_docs
 
-            return []
+        return []
 
     def update_search_fields(self, ad: AnnotatedDocument):
         populated_fields = ad.get_search_values()
@@ -618,7 +618,7 @@ if __name__ == '__main__':
 
         return results
 
-    docs = asyncio.run(_main(*[f"{i+2056:02d}" for i in range(20)]))
+    docs = asyncio.run(_main("pGRO-C1111bb_-_26-93-139-175-196-211"))
     for d in chain(*docs):
         if d:
-            print(d.doc_name)
+            print(d.doc_name, d.urn)
